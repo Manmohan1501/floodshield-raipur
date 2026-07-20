@@ -25,7 +25,7 @@ import numpy as np
 import streamlit as st
 
 RAIPUR_CENTER = (21.2514, 81.6296)   # Jaistambh Chowk, city center
-NETWORK_RADIUS_M = 4500              # ~4.5km radius = core urban Raipur
+NETWORK_RADIUS_M = 2500              # ~2.5km radius = central Raipur (kept smaller for reliable, fast fetches)
 
 # Real, well-documented flood-prone points (from local news reports)
 FLOOD_PRONE_POINTS = [
@@ -61,8 +61,17 @@ def drainage_quality_for_point(lat, lon):
 def get_road_network():
     """Downloads Raipur's real drivable road network from OpenStreetMap.
     Cached so this only runs once per app instance (first load is
-    slower; later loads are instant)."""
+    slower; later loads are instant).
+
+    A short, explicit timeout is set on purpose: the public OSM/Overpass
+    servers can occasionally be slow to respond, especially from shared
+    cloud IPs. Without a timeout, a slow response hangs the whole app
+    with no error message. With it, a slow server fails fast with a
+    clear error the app can show the user instead.
+    """
     import osmnx as ox
+    ox.settings.timeout = 45
+    ox.settings.log_console = False
     G = ox.graph_from_point(RAIPUR_CENTER, dist=NETWORK_RADIUS_M,
                              network_type="drive", simplify=True)
     return G

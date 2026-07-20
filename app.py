@@ -202,9 +202,12 @@ try:
 except Exception as e:
     network_ok = False
     st.error(
-        "Couldn't load the real road network right now (OpenStreetMap's servers may be "
-        f"busy or unreachable). Technical detail: {e}"
+        "Couldn't load the real road network right now -- OpenStreetMap's public "
+        "servers may be busy or slow to respond. This is usually temporary. "
+        f"Technical detail: {e}"
     )
+    if st.button("Retry"):
+        st.rerun()
 
 if network_ok:
     model = load_model()
