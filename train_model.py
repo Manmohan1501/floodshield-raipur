@@ -31,11 +31,13 @@ max_elev = roads_df.avg_elevation_m.max()
 min_elev = roads_df.avg_elevation_m.min()
 
 for event_id in range(N_EVENTS):
-    rainfall_mm = np.round(np.random.uniform(10, 180), 1)
+    # 0-150mm mirrors the "expected rain over next 6 hours" scale used
+    # live in the app (OpenWeatherMap forecast sum, or the manual slider)
+    rainfall_mm = np.round(np.random.uniform(0, 150), 1)
     for _, road in roads_df.iterrows():
         norm_elev = (road.avg_elevation_m - min_elev) / (max_elev - min_elev + 1e-9)
         flood_score = (
-            (rainfall_mm / 180) * 0.5 +
+            (rainfall_mm / 150) * 0.5 +
             (1 - norm_elev) * 0.35 +
             (1 - road.drainage_quality) * 0.15
         )

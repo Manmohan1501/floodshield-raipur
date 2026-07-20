@@ -6,3 +6,6 @@ networkx
 folium
 streamlit-folium
 joblib
+streamlit-js-eval
+requests
+osmnx
