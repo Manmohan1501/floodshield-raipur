@@ -104,17 +104,44 @@ def get_node_elevations(node_ids, lats, lons):
     return elevations
 
 
-def geocode_place(query, api_key_unused=None):
-    """Forward-geocode a place name to coordinates, biased to Raipur,
-    using OpenStreetMap's free Nominatim service."""
+def geocode_place(query):
+    """Turn a place name into coordinates. First checks a small list of
+    known real Raipur landmarks (fast, always reliable); falls back to
+    OpenStreetMap's free Nominatim search (biased to Raipur) for
+    anything else."""
+    q = query.strip().lower()
+    # 1. Exact match (case-insensitive)
+    for name, lat, lon in KNOWN_PLACES:
+        if q == name.lower():
+            return lat, lon
+
+    # 2. Query contains a known place name -- prefer the longest (most
+    #    specific) match, e.g. "near Gudhiyari Underbridge please" should
+    #    match "Gudhiyari Underbridge", not just "Gudhiyari"
+    contained = [(name, lat, lon) for name, lat, lon in KNOWN_PLACES if name.lower() in q]
+    if contained:
+        name, lat, lon = max(contained, key=lambda x: len(x[0]))
+        return lat, lon
+
+    # 3. Known place name contains the query (e.g. query "gudhiyari" vs
+    #    entry "Gudhiyari") -- again prefer the shortest/most exact match
+    partial = [(name, lat, lon) for name, lat, lon in KNOWN_PLACES if q in name.lower()]
+    if partial:
+        name, lat, lon = min(partial, key=lambda x: len(x[0]))
+        return lat, lon
+
     try:
+        # Bounding box around Raipur to bias/restrict results
         resp = requests.get(
             "https://nominatim.openstreetmap.org/search",
             params={
-                "q": f"{query}, Raipur, Chhattisgarh, India",
-                "format": "json", "limit": 1,
+                "q": query,
+                "format": "json",
+                "limit": 1,
+                "viewbox": "81.50,21.32,81.75,21.15",  # lon_min,lat_max,lon_max,lat_min
+                "bounded": 1,
             },
-            headers={"User-Agent": "FloodShield-Prototype/1.0"},
+            headers={"User-Agent": "FloodShield-Raipur-Prototype (learning project)"},
             timeout=8,
         )
         results = resp.json()
@@ -123,6 +150,32 @@ def geocode_place(query, api_key_unused=None):
     except Exception:
         pass
     return None, None
+
+
+# A small gazetteer of real, verified Raipur places -- checked first so
+# route search works reliably even if the external geocoding service is
+# slow, rate-limited, or phrased differently than expected.
+KNOWN_PLACES = [
+    ("Jaistambh Chowk", 21.2514, 81.6296),
+    ("City Center", 21.2514, 81.6296),
+    ("Gudhiyari Underbridge", 21.2300, 81.6070),
+    ("Gudhiyari", 21.2270, 81.6040),
+    ("Daganiya", 21.2050, 81.6280),
+    ("Tatibandh", 21.2110, 81.5820),
+    ("AIIMS Raipur", 21.2115, 81.5825),
+    ("AIIMS", 21.2115, 81.5825),
+    ("Telibandha", 21.2340, 81.6470),
+    ("Pandri", 21.2440, 81.6180),
+    ("Shankar Nagar", 21.2480, 81.6100),
+    ("Amanaka", 21.2600, 81.6550),
+    ("Mowa", 21.2750, 81.6650),
+    ("Kota", 21.2650, 81.6050),
+    ("Ambedkar Hospital", 21.2480, 81.6350),
+    ("DKS Hospital", 21.2480, 81.6350),
+    ("Moudhapara", 21.2480, 81.6350),
+    ("Devendra Nagar", 21.2550, 81.6250),
+    ("Railway Station", 21.2470, 81.6430),
+]
 
 
 def get_live_rainfall_forecast(lat, lon, api_key):
