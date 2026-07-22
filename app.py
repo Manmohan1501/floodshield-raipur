@@ -52,7 +52,7 @@ def reverse_geocode(lat, lon):
         return None, None
 
 
-@st.cache_resource(show_spinner="Loading Raipur's real road network from OpenStreetMap (first load only, ~30-60s)...")
+@st.cache_resource(show_spinner="Loading Raipur's real road network from OpenStreetMap (first load only, covers ~7.5km radius to reach real landmarks like AIIMS -- can take 1-2 min)...")
 def load_network_with_features():
     G = rn.get_road_network()
     node_ids = list(G.nodes)
@@ -375,16 +375,23 @@ if network_ok:
                 import osmnx as ox
                 start_node = ox.distance.nearest_nodes(G, X=start_lon, Y=start_lat)
                 end_node = ox.distance.nearest_nodes(G, X=end_lon, Y=end_lat)
-                options = get_route_options(G, start_node, end_node)
-                if not options:
-                    st.error("No route currently avoids flooding between these two points -- "
-                              "or one of them is completely cut off.")
+                if start_node == end_node:
+                    st.error(
+                        "Start and destination resolved to the same point on the road network -- "
+                        "try being more specific (e.g. a nearby landmark or fuller address)."
+                    )
                     st.session_state.pop("route_options", None)
                 else:
-                    st.session_state["route_options"] = options
-                    st.session_state["route_start"] = (start_lat, start_lon)
-                    st.session_state["route_end"] = (end_lat, end_lon)
-                    st.session_state["tracking"] = False
+                    options = get_route_options(G, start_node, end_node)
+                    if not options:
+                        st.error("No route currently avoids flooding between these two points -- "
+                                  "or one of them is completely cut off.")
+                        st.session_state.pop("route_options", None)
+                    else:
+                        st.session_state["route_options"] = options
+                        st.session_state["route_start"] = (start_lat, start_lon)
+                        st.session_state["route_end"] = (end_lat, end_lon)
+                        st.session_state["tracking"] = False
 
         options = st.session_state.get("route_options")
         if options:
