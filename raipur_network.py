@@ -136,15 +136,14 @@ def geocode_place(query):
         return lat, lon
 
     try:
-        # Bounding box around Raipur to bias/restrict results
         resp = requests.get(
             "https://nominatim.openstreetmap.org/search",
             params={
-                "q": query,
+                "q": f"{query}, Raipur, Chhattisgarh, India",
                 "format": "json",
                 "limit": 1,
-                "viewbox": "81.50,21.32,81.75,21.15",  # lon_min,lat_max,lon_max,lat_min
-                "bounded": 1,
+                "viewbox": "81.30,21.45,81.95,21.00",  # lon_min,lat_max,lon_max,lat_min -- soft bias only
+                "bounded": 0,  # bias toward this area, but don't hard-exclude results outside it
             },
             headers={"User-Agent": "FloodShield-Raipur-Prototype (learning project)"},
             timeout=8,

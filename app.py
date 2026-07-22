@@ -368,8 +368,20 @@ if network_ok:
                 start_lat, start_lon = rn.geocode_place(start_query)
                 end_lat, end_lon = rn.geocode_place(end_query)
 
+            coverage_km = rn.NETWORK_RADIUS_M / 1000
+            start_dist = rn.haversine_km(*rn.RAIPUR_CENTER, start_lat, start_lon) if start_lat else None
+            end_dist = rn.haversine_km(*rn.RAIPUR_CENTER, end_lat, end_lon) if end_lat else None
+
             if not start_lat or not end_lat:
                 st.error("Couldn't find one or both locations. Try a more specific place name.")
+                st.session_state.pop("route_options", None)
+            elif start_dist > coverage_km or end_dist > coverage_km:
+                far_one = start_query if start_dist > coverage_km else end_query
+                st.error(
+                    f"'{far_one}' is outside FloodShield's current coverage area (this prototype "
+                    f"covers roughly {coverage_km:.0f}km around central Raipur). Try a location closer "
+                    f"to the city center."
+                )
                 st.session_state.pop("route_options", None)
             else:
                 import osmnx as ox
