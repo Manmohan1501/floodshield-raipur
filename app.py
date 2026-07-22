@@ -81,7 +81,7 @@ def predict_edge_risk(G, elevations, drainage, rainfall_mm, model):
     return G
 
 
-def build_routing_graph(G, block_threshold=0.85):
+def build_routing_graph(G, block_threshold=0.85, risk_penalty=25):
     H = nx.MultiDiGraph()
     H.graph.update(G.graph)
     for n, data in G.nodes(data=True):
@@ -91,20 +91,76 @@ def build_routing_graph(G, block_threshold=0.85):
         if risk > block_threshold:
             continue
         length_km = data.get("length", 100) / 1000
-        weight = length_km * (1 + risk * 25)
+        weight = length_km * (1 + risk * risk_penalty)
         new_data = dict(data)
         new_data["weight"] = weight
         H.add_edge(u, v, key=k, **new_data)
     return H
 
 
+def route_distance_km(H, route):
+    return sum(H.edges[route[i], route[i + 1], 0].get("length", 0)
+               for i in range(len(route) - 1) if H.has_edge(route[i], route[i + 1])) / 1000
+
+
+def get_route_options(G, start_node, end_node):
+    """Returns up to 2 route options, similar to Google Maps offering
+    alternatives: a 'Safest' route (heavily avoids flood risk, even if
+    longer) and a 'Balanced' route (shorter, moderate risk avoidance).
+    Each entry: {label, route, latlon, distance_km, avg_risk}."""
+    options = []
+    strategies = [("Safest (avoids flood risk)", 25, 0.85), ("Balanced (shorter, some risk avoidance)", 5, 0.85)]
+    seen_routes = set()
+    for label, penalty, threshold in strategies:
+        H = build_routing_graph(G, block_threshold=threshold, risk_penalty=penalty)
+        if start_node not in H or end_node not in H:
+            continue
+        try:
+            route = nx.shortest_path(H, start_node, end_node, weight="weight")
+        except nx.NetworkXNoPath:
+            continue
+        key = tuple(route)
+        if key in seen_routes:
+            continue
+        seen_routes.add(key)
+        risks = [H.edges[route[i], route[i + 1], 0].get("flood_risk_prob", 0)
+                 for i in range(len(route) - 1) if H.has_edge(route[i], route[i + 1])]
+        options.append({
+            "label": label,
+            "route": route,
+            "latlon": route_to_latlon(H, route),
+            "distance_km": route_distance_km(H, route),
+            "avg_risk": (sum(risks) / len(risks)) if risks else 0,
+        })
+    return options
+
+
 def route_to_latlon(G, route):
     return [(G.nodes[n]["y"], G.nodes[n]["x"]) for n in route]
 
 
-def draw_network_map(G, center, route_latlon=None, start_latlon=None, end_latlon=None,
-                      user_latlon=None, max_edges_drawn=2500):
-    m = folium.Map(location=center, zoom_start=14, tiles="CartoDB positron")
+def draw_network_map(G, center, route_latlon=None, alt_routes_latlon=None, start_latlon=None,
+                      end_latlon=None, user_latlon=None, rainfall_mm=0, max_edges_drawn=2500):
+    # Real satellite imagery, like Google Maps satellite view
+    m = folium.Map(location=center, zoom_start=15, tiles=None)
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri World Imagery", name="Satellite", control=False,
+    ).add_to(m)
+
+    # Shaded "floodwater" zones over real known flood-prone areas -- radius
+    # and opacity scale with how much rain is expected, so it visibly
+    # grows during heavier storms.
+    zone_radius = 150 + min(rainfall_mm, 150) * 4  # meters
+    zone_opacity = min(0.15 + rainfall_mm / 300, 0.55)
+    for flat, flon, fname in rn.FLOOD_PRONE_POINTS:
+        folium.Circle(
+            location=(flat, flon), radius=zone_radius,
+            color="#1d4ed8", weight=1, fill=True, fill_color="#3b82f6",
+            fill_opacity=zone_opacity, opacity=0.4,
+            tooltip=f"Flood-prone area: {fname}",
+        ).add_to(m)
+
     edges = list(G.edges(keys=True, data=True))
     if len(edges) > max_edges_drawn:
         edges = edges[:max_edges_drawn]
@@ -114,23 +170,30 @@ def draw_network_map(G, center, route_latlon=None, start_latlon=None, end_latlon
         lat1, lon1 = G.nodes[u]["y"], G.nodes[u]["x"]
         lat2, lon2 = G.nodes[v]["y"], G.nodes[v]["x"]
         if flooded == 1:
-            color = "red" if risk > 0.85 else "orange"
-            weight = 3
+            # "Water hazard" blue-red gradient: certainly-flooded roads
+            # rendered in deep water-blue, risky roads in amber
+            color = "#0ea5e9" if risk > 0.85 else "#f59e0b"
+            weight = 4
         else:
-            color = "#3b82f6"
+            color = "#e5e7eb"
             weight = 1.5
-        folium.PolyLine([[lat1, lon1], [lat2, lon2]], color=color, weight=weight, opacity=0.55).add_to(m)
+        folium.PolyLine([[lat1, lon1], [lat2, lon2]], color=color, weight=weight, opacity=0.75).add_to(m)
+
+    # Alternate (non-chosen) route options, shown lighter/dashed
+    if alt_routes_latlon:
+        for alt in alt_routes_latlon:
+            folium.PolyLine(alt, color="#94a3b8", weight=4, opacity=0.6, dash_array="6,8").add_to(m)
 
     if route_latlon:
         folium.PolyLine(route_latlon, color="limegreen", weight=6, opacity=0.95,
                          tooltip="Recommended route").add_to(m)
     if start_latlon:
-        folium.Marker(start_latlon, tooltip="Start", icon=folium.Icon(color="blue", icon="user")).add_to(m)
+        folium.Marker(start_latlon, tooltip="Start", icon=folium.Icon(color="blue", icon="play")).add_to(m)
     if end_latlon:
-        folium.Marker(end_latlon, tooltip="Destination", icon=folium.Icon(color="black", icon="star")).add_to(m)
+        folium.Marker(end_latlon, tooltip="Destination", icon=folium.Icon(color="black", icon="flag")).add_to(m)
     if user_latlon:
-        folium.Marker(user_latlon, tooltip="Your location",
-                       icon=folium.Icon(color="purple", icon="home")).add_to(m)
+        folium.Marker(user_latlon, tooltip="Your live location",
+                       icon=folium.Icon(color="purple", icon="user")).add_to(m)
     return m
 
 
@@ -163,20 +226,35 @@ api_key = st.sidebar.text_input("OpenWeatherMap API key", type="password",
 weather_lat, weather_lon = (user_lat, user_lon) if (user_lat and detected_city and
                                                       detected_city.strip().lower() in SUPPORTED_CITIES) else rn.RAIPUR_CENTER
 
-live_rain_mm, weather_desc = (None, None)
+weather, weather_error = (None, None)
 if api_key:
     with st.sidebar:
-        with st.spinner("Fetching live forecast..."):
-            live_rain_mm, weather_desc = rn.get_live_rainfall_forecast(weather_lat, weather_lon, api_key)
-    if live_rain_mm is not None:
-        st.sidebar.metric("Expected rain (next 6h)", f"{live_rain_mm} mm")
-        st.sidebar.caption(f"Conditions: {weather_desc}")
+        with st.spinner("Fetching live weather..."):
+            weather, weather_error = rn.get_live_weather(weather_lat, weather_lon, api_key)
+    if weather:
+        icon_url = f"https://openweathermap.org/img/wn/{weather['current_icon']}@2x.png"
+        wcol1, wcol2 = st.sidebar.columns([1, 2])
+        wcol1.image(icon_url, width=60)
+        wcol2.metric("Now", f"{weather['current_temp']}\u00B0C", weather['current_desc'].title())
+        if weather["is_raining_now"]:
+            st.sidebar.warning(f"\U0001F327\uFE0F Raining now ({weather['rain_1h_mm']} mm in the last hour)")
+        st.sidebar.caption(f"Expected over next 6h: **{weather['rain_next_6h_mm']} mm**")
+
+        with st.sidebar.expander("Hourly forecast"):
+            for h in weather["hourly"][:6]:
+                hicon = f"https://openweathermap.org/img/wn/{h['icon']}.png"
+                hc1, hc2, hc3 = st.columns([1, 1, 2])
+                hc1.write(h["time"])
+                hc2.write(f"{h['temp']}\u00B0")
+                hc3.write(f"\U0001F4A7 {h['pop_pct']}% ({h['rain_mm']}mm)")
     else:
-        st.sidebar.warning(f"Couldn't fetch live weather yet ({weather_desc}). "
+        st.sidebar.warning(f"Couldn't fetch live weather yet ({weather_error}). "
                             f"New keys can take up to an hour to activate.")
 else:
-    st.sidebar.caption("Enter your free OpenWeatherMap key above for live rain data. "
+    st.sidebar.caption("Enter your free OpenWeatherMap key above for live weather. "
                         "Using a manual rainfall value below until then.")
+
+live_rain_mm = weather["rain_next_6h_mm"] if weather else None
 
 st.sidebar.divider()
 st.sidebar.subheader("\U0001F6A8 Emergency Contacts")
@@ -233,7 +311,7 @@ if network_ok:
     tab1, tab2 = st.tabs(["\U0001F5FA\uFE0F City Risk Map", "\U0001F9ED Route Planner"])
 
     with tab1:
-        m = draw_network_map(G, center=rn.RAIPUR_CENTER,
+        m = draw_network_map(G, center=rn.RAIPUR_CENTER, rainfall_mm=rainfall_mm,
                               user_latlon=(user_lat, user_lon) if user_lat else None)
         st_folium(m, width=None, height=520, key="risk_map")
 
@@ -270,34 +348,73 @@ if network_ok:
         start_query = c1.text_input("Start", value="Gudhiyari")
         end_query = c2.text_input("Destination", value="AIIMS Raipur")
 
-        if st.button("Find safest route", type="primary"):
-            with st.spinner("Looking up locations and calculating the safest route..."):
+        if st.button("Find routes", type="primary"):
+            with st.spinner("Looking up locations and calculating routes..."):
                 start_lat, start_lon = rn.geocode_place(start_query)
                 end_lat, end_lon = rn.geocode_place(end_query)
 
             if not start_lat or not end_lat:
                 st.error("Couldn't find one or both locations. Try a more specific place name.")
+                st.session_state.pop("route_options", None)
             else:
                 import osmnx as ox
                 start_node = ox.distance.nearest_nodes(G, X=start_lon, Y=start_lat)
                 end_node = ox.distance.nearest_nodes(G, X=end_lon, Y=end_lat)
-                H = build_routing_graph(G)
-
-                if start_node not in H or end_node not in H:
-                    st.error("One of these points is completely cut off by predicted flooding.")
+                options = get_route_options(G, start_node, end_node)
+                if not options:
+                    st.error("No route currently avoids flooding between these two points -- "
+                              "or one of them is completely cut off.")
+                    st.session_state.pop("route_options", None)
                 else:
-                    try:
-                        route = nx.shortest_path(H, start_node, end_node, weight="weight")
-                        route_latlon = route_to_latlon(H, route)
-                        dist_km = sum(H.edges[route[i], route[i+1], 0].get("length", 0)
-                                       for i in range(len(route)-1) if H.has_edge(route[i], route[i+1])) / 1000
-                        st.success(f"\u2705 Safest route found -- approx. {dist_km:.1f} km, avoiding high-risk roads.")
-                        m2 = draw_network_map(G, center=rn.RAIPUR_CENTER, route_latlon=route_latlon,
-                                               start_latlon=(start_lat, start_lon),
-                                               end_latlon=(end_lat, end_lon))
-                        st_folium(m2, width=None, height=520, key="route_map")
-                    except nx.NetworkXNoPath:
-                        st.error("No route currently avoids flooding between these two points.")
+                    st.session_state["route_options"] = options
+                    st.session_state["route_start"] = (start_lat, start_lon)
+                    st.session_state["route_end"] = (end_lat, end_lon)
+                    st.session_state["tracking"] = False
+
+        options = st.session_state.get("route_options")
+        if options:
+            st.markdown("#### Choose a route")
+            labels = [f"{o['label']} -- {o['distance_km']:.1f} km, avg risk {o['avg_risk']*100:.0f}%"
+                      for o in options]
+            chosen_idx = st.radio("Route options", range(len(options)), format_func=lambda i: labels[i],
+                                   label_visibility="collapsed")
+            chosen = options[chosen_idx]
+            other_routes = [o["latlon"] for i, o in enumerate(options) if i != chosen_idx]
+
+            start_latlon = st.session_state["route_start"]
+            end_latlon = st.session_state["route_end"]
+
+            trackcol1, trackcol2 = st.columns([1, 3])
+            tracking = trackcol1.toggle("\U0001F4CD Start live tracking", value=st.session_state.get("tracking", False))
+            st.session_state["tracking"] = tracking
+
+            live_user_latlon = None
+            if tracking:
+                try:
+                    from streamlit_autorefresh import st_autorefresh
+                    st_autorefresh(interval=6000, key="track_refresh")
+                except Exception:
+                    pass
+                fresh_loc = get_geolocation()
+                if fresh_loc and isinstance(fresh_loc, dict) and "coords" in fresh_loc:
+                    live_user_latlon = (fresh_loc["coords"]["latitude"], fresh_loc["coords"]["longitude"])
+                    remaining_km = rn.haversine_km(live_user_latlon[0], live_user_latlon[1],
+                                                     end_latlon[0], end_latlon[1])
+                    trackcol2.metric("Distance remaining to destination", f"{remaining_km:.2f} km (straight-line)")
+                    st.caption(
+                        "\u2139\uFE0F Live tracking here re-checks your real GPS position every ~6 seconds and "
+                        "shows straight-line distance remaining -- it doesn't snap to the road or give turn-by-turn "
+                        "voice directions like Google Maps, but your position and distance genuinely update as you move."
+                    )
+                else:
+                    trackcol2.info("Waiting for a live GPS fix...")
+
+            st.success(f"\u2705 {chosen['label']} -- approx. {chosen['distance_km']:.1f} km")
+            m2 = draw_network_map(G, center=rn.RAIPUR_CENTER, route_latlon=chosen["latlon"],
+                                   alt_routes_latlon=other_routes, rainfall_mm=rainfall_mm,
+                                   start_latlon=start_latlon, end_latlon=end_latlon,
+                                   user_latlon=live_user_latlon)
+            st_folium(m2, width=None, height=520, key="route_map")
 
 st.divider()
 st.caption(

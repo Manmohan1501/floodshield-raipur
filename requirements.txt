@@ -9,3 +9,4 @@ joblib
 streamlit-js-eval
 requests
 osmnx
+streamlit-autorefresh
