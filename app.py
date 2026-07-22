@@ -220,8 +220,16 @@ else:
 
 st.sidebar.divider()
 st.sidebar.subheader("\U0001F327\uFE0F Live Weather")
-api_key = st.sidebar.text_input("OpenWeatherMap API key", type="password",
-                                 help="Free key from openweathermap.org/api_keys")
+owner_key = st.secrets.get("OPENWEATHER_API_KEY") if hasattr(st, "secrets") else None
+if owner_key:
+    api_key = owner_key
+else:
+    api_key = st.sidebar.text_input("OpenWeatherMap API key", type="password",
+                                     help="Free key from openweathermap.org/api_keys")
+    st.sidebar.caption(
+        "\u2139\uFE0F The app owner hasn't set up a shared weather key yet, so each "
+        "visitor needs to enter their own for live data."
+    )
 
 weather_lat, weather_lon = (user_lat, user_lon) if (user_lat and detected_city and
                                                       detected_city.strip().lower() in SUPPORTED_CITIES) else rn.RAIPUR_CENTER
