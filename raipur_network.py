@@ -178,6 +178,57 @@ KNOWN_PLACES = [
 ]
 
 
+def get_live_weather(lat, lon, api_key):
+    """Real current conditions + hourly forecast from OpenWeatherMap,
+    shaped for a rich 'Now' weather card like Google/Apple Weather.
+    Returns (weather_dict, None) on success, or (None, error_message)."""
+    try:
+        current_resp = requests.get(
+            "https://api.openweathermap.org/data/2.5/weather",
+            params={"lat": lat, "lon": lon, "appid": api_key, "units": "metric"},
+            timeout=8,
+        )
+        current = current_resp.json()
+        if str(current.get("cod")) != "200":
+            return None, current.get("message", "Could not fetch current weather.")
+
+        forecast_resp = requests.get(
+            "https://api.openweathermap.org/data/2.5/forecast",
+            params={"lat": lat, "lon": lon, "appid": api_key, "units": "metric"},
+            timeout=8,
+        )
+        forecast = forecast_resp.json()
+        if str(forecast.get("cod")) != "200":
+            return None, forecast.get("message", "Could not fetch forecast.")
+
+        hourly = []
+        for entry in forecast.get("list", [])[:8]:  # next 24h in 3h steps
+            hourly.append({
+                "time": entry["dt_txt"][11:16],  # "HH:MM"
+                "temp": round(entry["main"]["temp"]),
+                "rain_mm": entry.get("rain", {}).get("3h", 0),
+                "pop_pct": round(entry.get("pop", 0) * 100),
+                "desc": entry["weather"][0]["description"],
+                "icon": entry["weather"][0]["icon"],
+            })
+
+        rain_next_6h = sum(h["rain_mm"] for h in hourly[:2])
+        is_raining_now = current.get("rain", {}).get("1h", 0) > 0 or "rain" in current["weather"][0]["main"].lower()
+
+        return {
+            "current_temp": round(current["main"]["temp"]),
+            "feels_like": round(current["main"]["feels_like"]),
+            "current_desc": current["weather"][0]["description"],
+            "current_icon": current["weather"][0]["icon"],
+            "is_raining_now": is_raining_now,
+            "rain_1h_mm": current.get("rain", {}).get("1h", 0),
+            "rain_next_6h_mm": round(rain_next_6h, 1),
+            "hourly": hourly,
+        }, None
+    except Exception as e:
+        return None, str(e)
+
+
 def get_live_rainfall_forecast(lat, lon, api_key):
     """Real live rainfall forecast via OpenWeatherMap: sums forecast
     rain volume over the next 6 hours as a proxy for 'incoming storm
