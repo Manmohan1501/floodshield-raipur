@@ -107,7 +107,7 @@ def get_route_options(G, start_node, end_node):
     """Returns up to 2 route options, similar to Google Maps offering
     alternatives: a 'Safest' route (heavily avoids flood risk, even if
     longer) and a 'Balanced' route (shorter, moderate risk avoidance).
-    Each entry: {label, route, latlon, distance_km, avg_risk}."""
+    Each entry: {label, route, latlon, distance_km, duration_min, avg_risk}."""
     options = []
     strategies = [("Safest (avoids flood risk)", 25, 0.85), ("Balanced (shorter, some risk avoidance)", 5, 0.85)]
     seen_routes = set()
@@ -125,11 +125,18 @@ def get_route_options(G, start_node, end_node):
         seen_routes.add(key)
         risks = [H.edges[route[i], route[i + 1], 0].get("flood_risk_prob", 0)
                  for i in range(len(route) - 1) if H.has_edge(route[i], route[i + 1])]
+        distance_km = route_distance_km(H, route)
+        # Estimated time using a typical urban average speed. This is a
+        # rough estimate (not live traffic data) -- flagged as
+        # 'approx.' in the UI rather than presented as exact.
+        avg_speed_kmh = 22
+        duration_min = (distance_km / avg_speed_kmh) * 60
         options.append({
             "label": label,
             "route": route,
             "latlon": route_to_latlon(H, route),
-            "distance_km": route_distance_km(H, route),
+            "distance_km": distance_km,
+            "duration_min": duration_min,
             "avg_risk": (sum(risks) / len(risks)) if risks else 0,
         })
     return options
@@ -382,7 +389,7 @@ if network_ok:
         options = st.session_state.get("route_options")
         if options:
             st.markdown("#### Choose a route")
-            labels = [f"{o['label']} -- {o['distance_km']:.1f} km, avg risk {o['avg_risk']*100:.0f}%"
+            labels = [f"{o['label']} -- ~{o['duration_min']:.0f} min ({o['distance_km']:.1f} km), avg risk {o['avg_risk']*100:.0f}%"
                       for o in options]
             chosen_idx = st.radio("Route options", range(len(options)), format_func=lambda i: labels[i],
                                    label_visibility="collapsed")
@@ -417,7 +424,8 @@ if network_ok:
                 else:
                     trackcol2.info("Waiting for a live GPS fix...")
 
-            st.success(f"\u2705 {chosen['label']} -- approx. {chosen['distance_km']:.1f} km")
+            st.success(f"\u2705 {chosen['label']} -- approx. {chosen['distance_km']:.1f} km, "
+                        f"~{chosen['duration_min']:.0f} min")
             m2 = draw_network_map(G, center=rn.RAIPUR_CENTER, route_latlon=chosen["latlon"],
                                    alt_routes_latlon=other_routes, rainfall_mm=rainfall_mm,
                                    start_latlon=start_latlon, end_latlon=end_latlon,
